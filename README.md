@@ -20,7 +20,7 @@ Open http://localhost:5173.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `AI_API_KEY` | yes | Model provider key. Read by the dev-server proxy only — **no `VITE_` prefix**, so it is never inlined into the browser bundle. |
+| `AI_API_KEY` | yes | Model provider key. Read server-side by the proxy (dev) or edge function (deployed) — **no `VITE_` prefix**, so it is never inlined into the browser bundle. |
 | `VITE_SUPABASE_URL` | no | Enables progress persistence. Without it the app runs in memory. |
 | `VITE_SUPABASE_ANON_KEY` | no | As above. |
 
@@ -41,20 +41,42 @@ src/
 ### The model endpoint is proxied, not called directly
 
 `integrate.api.nvidia.com` sends no CORS headers, so the browser cannot call it
-from page JavaScript. `vite.config.js` exposes `/api/ai` as a same-origin proxy
-and attaches the key server-side. This fixes CORS and keeps the key out of the
-client bundle.
+from page JavaScript. Two proxies expose the same `/api/ai` path and attach the
+key server-side, so the client code is identical in both environments:
 
-**Deploying anywhere other than `vite dev`/`vite preview` requires porting that
-proxy to a serverless function** (Vercel/Netlify function, Express route, or
-similar) that forwards to `https://integrate.api.nvidia.com/v1/chat/completions`
-with the `Authorization` header attached. Without it the AI features will fail
-and the app will fall back to its sample path.
+| Environment | Proxy |
+| --- | --- |
+| `npm run dev` / `npm run preview` | `vite.config.js` |
+| Deployed | `api/ai.js` (edge function) |
 
-### Latency
+The key is read as `AI_API_KEY` — deliberately without a `VITE_` prefix, so Vite
+never inlines it into the browser bundle.
 
-The upstream is slow and highly variable — 17-56s for a short reply, and longer
-for path generation. Timeouts are sized accordingly in `src/services/aiService.js`,
-requests time out rather than hang forever, and every AI surface degrades to a
-usable state on failure. Path generation offers a built-in sample path so a demo
-can continue with no network.
+### Deploying
+
+The repo is configured for Vercel (`vercel.json` + `api/ai.js`).
+
+1. Import the repository at [vercel.com/new](https://vercel.com/new).
+2. Add an environment variable `AI_API_KEY` with your NVIDIA NIM key.
+3. Deploy. The build and output settings come from `vercel.json`.
+
+For another host, port `api/ai.js` to its function format. The requirement is
+that it streams the upstream body through rather than buffering it — see below.
+
+### Latency, and why every call streams
+
+The upstream is slow and highly variable: 17-56s for a short reply, and up to
+~2 minutes for path generation. Two consequences shape the design.
+
+**Everything streams.** `postOnce` in `src/services/aiService.js` always sends
+`stream: true` and accumulates the deltas, even for calls whose result is only
+useful complete. A buffered request that sends nothing for two minutes is killed
+by serverless function timeouts; streaming keeps bytes flowing so the request
+survives. The assistant additionally renders its deltas as they arrive.
+
+**Timeouts limit silence, not duration.** The per-call budget resets on each
+delta, so a slow-but-progressing response is never cut off, while a genuinely
+dead connection still fails fast.
+
+Every AI surface degrades to a usable state on failure, and path generation
+offers a built-in sample path so a demo can continue with no network at all.

@@ -203,42 +203,109 @@ function summarisePathForDiff(path) {
 
 // ─── Core request ───────────────────────────────────────────
 
-async function postOnce(systemPrompt, messages, budget, temperature) {
+/**
+ * Splits a decoder buffer into complete SSE events, returning any trailing
+ * partial line so it can be prepended to the next chunk. A network chunk can
+ * end mid-line, and parsing that half-line would drop tokens.
+ */
+function takeCompleteLines(buffer) {
+  const lines = buffer.split('\n');
+  return { lines: lines.slice(0, -1), rest: lines[lines.length - 1] };
+}
+
+function readFinishReason(line) {
+  if (!line.startsWith('data:')) return null;
+  const payload = line.slice(5).trim();
+  if (!payload || payload === '[DONE]') return null;
+  try {
+    return JSON.parse(payload)?.choices?.[0]?.finish_reason ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readDelta(line) {
+  if (!line.startsWith('data:')) return null;
+  const payload = line.slice(5).trim();
+  if (!payload || payload === '[DONE]') return null;
+  try {
+    return JSON.parse(payload)?.choices?.[0]?.delta?.content ?? null;
+  } catch {
+    return null; // A malformed frame should not abort a healthy stream.
+  }
+}
+
+/**
+ * Every call uses the streaming transport, even the ones whose result is only
+ * useful complete. Path generation can run for minutes, and a buffered request
+ * that sends nothing for that long is killed by serverless platform timeouts.
+ * Streaming keeps bytes flowing, so the connection stays alive; the deltas are
+ * simply accumulated and returned as one string.
+ */
+async function postOnce(systemPrompt, messages, budget, temperature, onChunk) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), budget.timeout);
+  // Reset by each delta, so the budget limits silence rather than total length.
+  let idleTimer;
+  const resetIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), budget.timeout);
+  };
+  resetIdle();
 
   try {
     const response = await fetch(API_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({
         model: MODEL,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
         temperature,
         top_p: 0.95,
         max_tokens: budget.maxTokens,
+        stream: true,
       }),
       signal: controller.signal,
     });
 
-    if (!response.ok) {
+    if (!response.ok || !response.body) {
       throw new AiServiceError(`Upstream responded ${response.status}`, 'network');
     }
 
-    const data = await response.json();
-    const choice = data?.choices?.[0];
-    const content = choice?.message?.content;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let full = '';
+    let truncated = false;
 
-    if (typeof content !== 'string' || !content.trim()) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      resetIdle();
+
+      buffer += decoder.decode(value, { stream: true });
+      const { lines, rest } = takeCompleteLines(buffer);
+      buffer = rest;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (readFinishReason(trimmed) === 'length') truncated = true;
+        const delta = readDelta(trimmed);
+        if (!delta) continue;
+        full += delta;
+        onChunk?.(delta);
+      }
+    }
+
+    if (!full.trim()) {
       throw new AiServiceError('Response contained no message content', 'parse');
     }
-    if (choice.finish_reason === 'length') {
+    if (truncated) {
       throw new AiServiceError('Response was cut off before it finished', 'parse');
     }
 
-    return content;
+    return full;
   } finally {
-    clearTimeout(timer);
+    clearTimeout(idleTimer);
   }
 }
 
@@ -265,96 +332,30 @@ async function callModel(kind, systemPrompt, messages, temperature = TEMPERATURE
 // ─── Streaming ──────────────────────────────────────────────
 
 /**
- * Splits a decoder buffer into complete SSE events, returning any trailing
- * partial line so it can be prepended to the next chunk. A network chunk can
- * end mid-line, and parsing that half-line would drop tokens.
- */
-function takeCompleteLines(buffer) {
-  const lines = buffer.split('\n');
-  return { lines: lines.slice(0, -1), rest: lines[lines.length - 1] };
-}
-
-function readDelta(line) {
-  if (!line.startsWith('data:')) return null;
-  const payload = line.slice(5).trim();
-  if (!payload || payload === '[DONE]') return null;
-  try {
-    return JSON.parse(payload)?.choices?.[0]?.delta?.content ?? null;
-  } catch {
-    return null; // A malformed frame should not abort a healthy stream.
-  }
-}
-
-/**
- * Streams a completion, emitting text as it arrives. Falls back to the
- * buffered call if streaming fails for any reason, so a proxy or network that
- * cannot do SSE still produces an answer instead of an error.
+ * Streams a completion, emitting text as it arrives. Falls back to a second
+ * attempt if the stream fails, so a transient break still produces an answer
+ * rather than an error.
  */
 export async function streamAIResponse({ messages, systemPrompt, onChunk, onDone, onError }) {
+  const budget = { maxTokens: MAX_TOKENS.streaming, timeout: TIMEOUT_MS.streaming };
+
   await awaitCooldown();
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS.streaming);
-
   try {
-    const response = await fetch(API_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        temperature: TEMPERATURE.conversational,
-        top_p: 0.95,
-        max_tokens: MAX_TOKENS.streaming,
-        stream: true,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok || !response.body) {
-      throw new AiServiceError(`Upstream responded ${response.status}`, 'network');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let full = '';
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const { lines, rest } = takeCompleteLines(buffer);
-      buffer = rest;
-
-      for (const line of lines) {
-        const delta = readDelta(line.trim());
-        if (!delta) continue;
-        full += delta;
-        onChunk?.(delta);
-      }
-    }
-
-    if (!full.trim()) {
-      throw new AiServiceError('Stream produced no content', 'parse');
-    }
-
+    const full = await postOnce(systemPrompt, messages, budget, TEMPERATURE.conversational, onChunk);
     onDone?.(full);
     return full;
   } catch (error) {
     onError?.(error);
 
-    // Last resort: the buffered path still works when SSE does not.
     try {
-      const fallback = await callModel('assistant', systemPrompt, messages);
+      await sleep(RETRY_DELAY_MS);
+      await awaitCooldown();
+      const fallback = await postOnce(systemPrompt, messages, budget, TEMPERATURE.conversational);
       onDone?.(fallback);
       return fallback;
     } catch {
       return null;
     }
-  } finally {
-    clearTimeout(timer);
   }
 }
 

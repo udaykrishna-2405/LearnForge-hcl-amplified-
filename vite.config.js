@@ -42,6 +42,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react(), tailwindcss()],
+    // api/ is deployed as a serverless function, not bundled into the client.
+    build: { rollupOptions: { external: [/^\/api\//] } },
     server: { proxy: aiProxy(env) },
     preview: { proxy: aiProxy(env) },
   };
