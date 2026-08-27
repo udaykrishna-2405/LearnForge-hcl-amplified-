@@ -1,23 +1,41 @@
 import { useEffect, useState } from 'react';
 
-const ROTATING_MESSAGES = [
-  'Analysing your skill gaps',
-  'Matching courses to your goals',
-  'Ordering the sequence by prerequisite',
-  'Writing the rationale for each course',
-  'Setting milestone checkpoints',
+/**
+ * Path generation runs for minutes and returns JSON, so it cannot stream.
+ * Narrating the stages instead makes the wait read as work in progress rather
+ * than a hang. The final stage has no duration and holds until the call lands.
+ */
+const GENERATION_STAGES = [
+  { message: 'Reading your profile', duration: 4000 },
+  { message: 'Mapping your skill gaps', duration: 6000 },
+  { message: 'Selecting courses from the catalog', duration: 8000 },
+  { message: 'Ordering prerequisites', duration: 6000 },
+  { message: 'Building your roadmap', duration: 5000 },
+  { message: 'Almost ready', duration: null },
 ];
 
 export default function LoadingScreen({ message }) {
-  const [index, setIndex] = useState(0);
+  const [stage, setStage] = useState(0);
+  const [visible, setVisible] = useState(true);
 
   useEffect(() => {
-    if (message) return;
-    const interval = setInterval(() => {
-      setIndex((prev) => (prev + 1) % ROTATING_MESSAGES.length);
-    }, 2400);
-    return () => clearInterval(interval);
-  }, [message]);
+    if (message) return undefined;
+
+    const { duration } = GENERATION_STAGES[stage];
+    if (duration === null) return undefined;
+
+    // Fade out just before swapping so the change reads as a transition.
+    const fadeOut = setTimeout(() => setVisible(false), duration - 300);
+    const advance = setTimeout(() => {
+      setStage((s) => Math.min(s + 1, GENERATION_STAGES.length - 1));
+      setVisible(true);
+    }, duration);
+
+    return () => {
+      clearTimeout(fadeOut);
+      clearTimeout(advance);
+    };
+  }, [stage, message]);
 
   return (
     <div
@@ -32,8 +50,11 @@ export default function LoadingScreen({ message }) {
         <div className="h-16 rounded-lg border border-slate-800 bg-slate-800/60 animate-soft-pulse" style={{ animationDelay: '0.4s' }} />
       </div>
 
-      <p className="mt-8 text-sm text-slate-300">
-        {message || ROTATING_MESSAGES[index]}
+      <p
+        className="mt-8 text-sm text-slate-300 transition-opacity duration-300 ease-out"
+        style={{ opacity: message || visible ? 1 : 0 }}
+      >
+        {message || GENERATION_STAGES[stage].message}
       </p>
     </div>
   );

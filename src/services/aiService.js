@@ -1,7 +1,6 @@
 import { ONBOARDING_SYSTEM_PROMPT, PROFILE_EXTRACTION_SYSTEM_PROMPT } from '../prompts/onboardingPrompt';
 import { PATH_GENERATION_SYSTEM_PROMPT } from '../prompts/pathGenerationPrompt';
-import { ADAPTATION_SYSTEM_PROMPT } from '../prompts/adaptationPrompt';
-import { buildAssistantPrompt } from '../prompts/assistantPrompt';
+import { ADAPTATION_SYSTEM_PROMPT } from '../prompts/pathAdaptation';
 
 // ─── Constants & Configuration ──────────────────────────────
 
@@ -16,6 +15,10 @@ const RETRY_DELAY_MS = 2_000;
 // This endpoint is slow and highly variable — measured at 17-56s for a
 // two-token reply — so budgets are generous and scale with output size.
 const TIMEOUT_MS = {
+  streaming: 120_000,
+  dailyPlan: 90_000,
+  quiz: 90_000,
+  readiness: 120_000,
   onboarding: 90_000,
   profileExtraction: 90_000,
   pathGeneration: 210_000,
@@ -30,6 +33,10 @@ const TIMEOUT_MS = {
  * small because it returns only a diff.
  */
 const MAX_TOKENS = {
+  streaming: 1000,
+  dailyPlan: 700,
+  quiz: 1200,
+  readiness: 900,
   onboarding: 800,
   profileExtraction: 500,
   pathGeneration: 6144,
@@ -255,6 +262,102 @@ async function callModel(kind, systemPrompt, messages, temperature = TEMPERATURE
   }
 }
 
+// ─── Streaming ──────────────────────────────────────────────
+
+/**
+ * Splits a decoder buffer into complete SSE events, returning any trailing
+ * partial line so it can be prepended to the next chunk. A network chunk can
+ * end mid-line, and parsing that half-line would drop tokens.
+ */
+function takeCompleteLines(buffer) {
+  const lines = buffer.split('\n');
+  return { lines: lines.slice(0, -1), rest: lines[lines.length - 1] };
+}
+
+function readDelta(line) {
+  if (!line.startsWith('data:')) return null;
+  const payload = line.slice(5).trim();
+  if (!payload || payload === '[DONE]') return null;
+  try {
+    return JSON.parse(payload)?.choices?.[0]?.delta?.content ?? null;
+  } catch {
+    return null; // A malformed frame should not abort a healthy stream.
+  }
+}
+
+/**
+ * Streams a completion, emitting text as it arrives. Falls back to the
+ * buffered call if streaming fails for any reason, so a proxy or network that
+ * cannot do SSE still produces an answer instead of an error.
+ */
+export async function streamAIResponse({ messages, systemPrompt, onChunk, onDone, onError }) {
+  await awaitCooldown();
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS.streaming);
+
+  try {
+    const response = await fetch(API_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature: TEMPERATURE.conversational,
+        top_p: 0.95,
+        max_tokens: MAX_TOKENS.streaming,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new AiServiceError(`Upstream responded ${response.status}`, 'network');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let full = '';
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const { lines, rest } = takeCompleteLines(buffer);
+      buffer = rest;
+
+      for (const line of lines) {
+        const delta = readDelta(line.trim());
+        if (!delta) continue;
+        full += delta;
+        onChunk?.(delta);
+      }
+    }
+
+    if (!full.trim()) {
+      throw new AiServiceError('Stream produced no content', 'parse');
+    }
+
+    onDone?.(full);
+    return full;
+  } catch (error) {
+    onError?.(error);
+
+    // Last resort: the buffered path still works when SSE does not.
+    try {
+      const fallback = await callModel('assistant', systemPrompt, messages);
+      onDone?.(fallback);
+      return fallback;
+    } catch {
+      return null;
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ─── Public API ─────────────────────────────────────────────
 
 /** The conversational half of an onboarding turn. */
@@ -340,10 +443,38 @@ export async function adaptPath(action, profile, currentPath, courseCatalog, com
   };
 }
 
-export async function queryAssistant(query, profile, path, progress, history) {
-  const systemPrompt = buildAssistantPrompt(profile, path, progress);
-  // The panel's opening greeting is local, so it is dropped before sending.
-  const turns = history.filter((m, i) => !(i === 0 && m.role === 'assistant'));
 
-  return callModel('assistant', systemPrompt, [...turns, { role: 'user', content: query }]);
+// ─── Feature calls ──────────────────────────────────────────
+
+/** Shared shape for the small structured features. */
+async function requestJSON(kind, systemPrompt, userContent, validate) {
+  const text = await callModel(
+    kind,
+    systemPrompt,
+    [{ role: 'user', content: userContent }],
+    TEMPERATURE.structured
+  );
+
+  const parsed = extractJSON(text);
+  if (!parsed || (validate && !validate(parsed))) {
+    throw new AiServiceError(`${kind} response was not valid JSON`, 'parse');
+  }
+  return parsed;
+}
+
+export function generateDailyPlan(systemPrompt, context) {
+  return requestJSON('dailyPlan', systemPrompt, context, (p) => Boolean(p.primary_task));
+}
+
+export function generateQuiz(systemPrompt, notes) {
+  return requestJSON('quiz', systemPrompt, notes, (q) => Array.isArray(q.questions));
+}
+
+export function generateReadiness(systemPrompt, context) {
+  return requestJSON(
+    'readiness',
+    systemPrompt,
+    context,
+    (r) => typeof r.overall_score === 'number' && Boolean(r.breakdown)
+  );
 }

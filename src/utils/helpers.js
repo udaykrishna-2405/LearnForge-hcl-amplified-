@@ -111,35 +111,6 @@ export function calculateProgress(path, completedItems, skippedItems = [], weekl
   };
 }
 
-/**
- * Current skill levels derived from what the learner has actually finished.
- * Courses skipped as "already known" count too — that is what the learner told
- * us when they skipped them.
- */
-export function calculateSkillLevels(path, completedItems, skippedItems, skipReasons) {
-  const levels = {};
-  const progression = path?.skill_progression ?? {};
-
-  for (const [skill, data] of Object.entries(progression)) {
-    levels[skill] = skillLevelToNum(data?.start);
-  }
-
-  const credited = new Set([
-    ...completedItems,
-    ...skippedItems.filter((id) => skipReasons?.[id] === 'already_know'),
-  ]);
-
-  for (const item of getAllItems(path)) {
-    if (!credited.has(item.item_id)) continue;
-    for (const tag of item.skills_addressed ?? []) {
-      const [skill, level] = String(tag).split(':');
-      if (!(skill in levels)) continue;
-      levels[skill] = Math.max(levels[skill], skillLevelToNum(level));
-    }
-  }
-
-  return levels;
-}
 
 // ─── Path adaptation ────────────────────────────────────────
 

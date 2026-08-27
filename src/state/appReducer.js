@@ -16,6 +16,26 @@ export const ACTIONS = {
   REMOVE_TOAST: 'REMOVE_TOAST',
   TOGGLE_PHASE: 'TOGGLE_PHASE',
   RESET: 'RESET',
+
+  // ─── Daily planner ───
+  SET_DAILY_PLAN: 'SET_DAILY_PLAN',
+  LOG_STUDY_SESSION: 'LOG_STUDY_SESSION',
+  SET_STUDY_SESSIONS: 'SET_STUDY_SESSIONS',
+  SET_STREAK: 'SET_STREAK',
+
+  // ─── Adaptive feedback ───
+  OPEN_FEEDBACK: 'OPEN_FEEDBACK',
+  CLOSE_FEEDBACK: 'CLOSE_FEEDBACK',
+  APPLY_PATH_CHANGES: 'APPLY_PATH_CHANGES',
+  ADD_CHANGELOG_ENTRY: 'ADD_CHANGELOG_ENTRY',
+
+  // ─── Notes & quizzing ───
+  SAVE_NOTE: 'SAVE_NOTE',
+  DELETE_NOTE: 'DELETE_NOTE',
+  SET_NOTES: 'SET_NOTES',
+
+  // ─── Readiness ───
+  SET_READINESS_SCORE: 'SET_READINESS_SCORE',
 };
 
 export const initialState = {
@@ -23,6 +43,7 @@ export const initialState = {
   profile: null,
   chatHistory: [],
   path: null,
+  pathStartedAt: null,  // Anchors every pacing calculation
   pathStatus: 'idle',     // 'idle' | 'generating' | 'ready' | 'error'
   isLoading: false,
   loadingMessage: '',
@@ -33,6 +54,15 @@ export const initialState = {
   completedItems: [],
   skippedItems: [],
   skipReasons: {},        // itemId -> reason, so skills can be credited later
+
+  dailyPlan: null,
+  studySessions: [],      // [{ date: 'YYYY-MM-DD', minutes }]
+  streak: 0,
+  changelog: [],          // Reverse-chronological path adaptations
+  notes: {},              // courseId -> note text
+  readinessScore: null,
+  feedbackModalOpen: false,
+  feedbackTargetCourse: null,
 };
 
 // ─── Reducer ────────────────────────────────────────────────
@@ -55,6 +85,7 @@ export function appReducer(state, action) {
       return {
         ...state,
         path: action.payload,
+        pathStartedAt: state.pathStartedAt ?? new Date().toISOString(),
         pathStatus: 'ready',
         expandedPhases: firstPhase ? [firstPhase] : [],
       };
@@ -111,6 +142,65 @@ export function appReducer(state, action) {
           : [...state.expandedPhases, id],
       };
     }
+
+    // ─── Daily planner ───
+
+    case ACTIONS.SET_DAILY_PLAN:
+      return { ...state, dailyPlan: action.payload };
+
+    case ACTIONS.SET_STUDY_SESSIONS:
+      return { ...state, studySessions: action.payload };
+
+    case ACTIONS.LOG_STUDY_SESSION: {
+      const { date, minutes } = action.payload;
+      // One session per day; logging again tops up that day's minutes.
+      const existing = state.studySessions.find((s) => s.date === date);
+      const studySessions = existing
+        ? state.studySessions.map((s) =>
+            s.date === date ? { ...s, minutes: s.minutes + minutes } : s
+          )
+        : [...state.studySessions, { date, minutes }];
+      return { ...state, studySessions };
+    }
+
+    case ACTIONS.SET_STREAK:
+      return { ...state, streak: action.payload };
+
+    // ─── Adaptive feedback ───
+
+    case ACTIONS.OPEN_FEEDBACK:
+      return { ...state, feedbackModalOpen: true, feedbackTargetCourse: action.payload };
+
+    case ACTIONS.CLOSE_FEEDBACK:
+      return { ...state, feedbackModalOpen: false, feedbackTargetCourse: null };
+
+    case ACTIONS.APPLY_PATH_CHANGES:
+      return { ...state, path: action.payload };
+
+    case ACTIONS.ADD_CHANGELOG_ENTRY:
+      return { ...state, changelog: [action.payload, ...state.changelog] };
+
+    // ─── Notes & quizzing ───
+
+    case ACTIONS.SAVE_NOTE:
+      return {
+        ...state,
+        notes: { ...state.notes, [action.payload.courseId]: action.payload.content },
+      };
+
+    case ACTIONS.DELETE_NOTE: {
+      const notes = { ...state.notes };
+      delete notes[action.payload];
+      return { ...state, notes };
+    }
+
+    case ACTIONS.SET_NOTES:
+      return { ...state, notes: action.payload };
+
+    // ─── Readiness ───
+
+    case ACTIONS.SET_READINESS_SCORE:
+      return { ...state, readinessScore: action.payload };
 
     case ACTIONS.RESET:
       return initialState;

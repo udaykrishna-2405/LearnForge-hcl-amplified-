@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import Button from '../shared/Button';
 import { CheckIcon, LockIcon, SkipIcon } from '../shared/Icons';
+import CourseNotes from './CourseNotes';
 import { getDifficultyColor, formatDuration } from '../../utils/helpers';
 
 const SURFACE = {
@@ -10,7 +11,7 @@ const SURFACE = {
   skipped: 'border-slate-800 bg-slate-800/20',
 };
 
-function CourseCard({ item, status, onComplete, onSkip, isBusy }) {
+function CourseCard({ item, status, onComplete, onSkip, isBusy, learnerId, note, dispatch }) {
   const isActive = status === 'active';
 
   return (
@@ -57,7 +58,7 @@ function CourseCard({ item, status, onComplete, onSkip, isBusy }) {
       <div className="mt-3 flex items-center gap-2">
         {isActive && (
           <>
-            <Button size="sm" onClick={() => onComplete(item.item_id)} disabled={isBusy}>
+            <Button size="sm" onClick={() => onComplete(item)} disabled={isBusy}>
               <CheckIcon className="w-3.5 h-3.5" />
               Mark complete
             </Button>
@@ -70,6 +71,16 @@ function CourseCard({ item, status, onComplete, onSkip, isBusy }) {
         {status === 'skipped' && <span className="text-sm text-slate-400">Skipped</span>}
         {status === 'locked' && <span className="text-sm text-slate-400">Complete prerequisites first</span>}
       </div>
+
+      {status !== 'locked' && (
+        <CourseNotes
+          learnerId={learnerId}
+          courseId={item.item_id}
+          courseTitle={item.title}
+          note={note}
+          dispatch={dispatch}
+        />
+      )}
     </article>
   );
 }

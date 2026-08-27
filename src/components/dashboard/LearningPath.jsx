@@ -3,7 +3,7 @@ import PhaseCard from './PhaseCard';
 
 export default function LearningPath({
   path, expandedPhases, completedItems, skippedItems,
-  onTogglePhase, onCompleteCourse, onSkipCourse, isBusy,
+  onTogglePhase, onCompleteCourse, onSkipCourse, isBusy, learnerId, notes, dispatch,
 }) {
   // Each phase is gated by every item ahead of it, so prefixes are built once.
   const priorItemsByPhase = useMemo(
@@ -29,6 +29,9 @@ export default function LearningPath({
             onCompleteCourse={onCompleteCourse}
             onSkipCourse={onSkipCourse}
             isBusy={isBusy}
+            learnerId={learnerId}
+            notes={notes}
+            dispatch={dispatch}
           />
         ))}
       </div>

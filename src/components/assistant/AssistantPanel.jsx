@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Button from '../shared/Button';
 import { CloseIcon, SendIcon } from '../shared/Icons';
-import { queryAssistant } from '../../services/aiService';
+import { streamAIResponse } from '../../services/aiService';
+import { buildAssistantPrompt } from '../../prompts/assistantPrompt';
 
 const SUGGESTIONS = [
   'Why is this the order?',
@@ -16,6 +17,7 @@ const MAX_MESSAGES = 20;
 export default function AssistantPanel({ isOpen, onClose, profile, path, progress, history, onAddMessage }) {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [streamed, setStreamed] = useState('');
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -29,7 +31,7 @@ export default function AssistantPanel({ isOpen, onClose, profile, path, progres
 
   useEffect(() => {
     if (isOpen) endRef.current?.scrollIntoView({ block: 'end' });
-  }, [isOpen, history, isTyping]);
+  }, [isOpen, history, isTyping, streamed]);
 
   const atLimit = history.length >= MAX_MESSAGES;
 
@@ -41,18 +43,32 @@ export default function AssistantPanel({ isOpen, onClose, profile, path, progres
       setInput('');
       onAddMessage({ role: 'user', content: question });
       setIsTyping(true);
+      setStreamed('');
 
-      try {
-        const answer = await queryAssistant(question, profile, path, progress, history);
-        onAddMessage({ role: 'assistant', content: answer });
-      } catch {
-        onAddMessage({
-          role: 'assistant',
-          content: "I'm having trouble connecting. Let me try again.",
-        });
-      } finally {
-        setIsTyping(false);
-      }
+      // The opening greeting is local, so it never goes back to the model.
+      const turns = history
+        .filter((m, i) => !(i === 0 && m.role === 'assistant'))
+        .map(({ role, content }) => ({ role, content }));
+
+      let failed = false;
+
+      const answer = await streamAIResponse({
+        systemPrompt: buildAssistantPrompt(profile, path, progress),
+        messages: [...turns, { role: 'user', content: question }],
+        onChunk: (delta) => setStreamed((prev) => prev + delta),
+        onError: () => { failed = true; },
+      });
+
+      setStreamed('');
+      setIsTyping(false);
+
+      onAddMessage({
+        role: 'assistant',
+        content: answer ?? "I'm having trouble connecting. Let me try again.",
+      });
+
+      // A recovered fallback still answered, so only a total failure is noted.
+      if (failed && !answer) setStreamed('');
     },
     [atLimit, history, isTyping, onAddMessage, path, profile, progress]
   );
@@ -115,11 +131,20 @@ export default function AssistantPanel({ isOpen, onClose, profile, path, progres
           ))}
 
           {isTyping && (
-            <div className="flex gap-1.5 px-1">
-              <span className="animate-typing-dot h-1.5 w-1.5 rounded-full bg-slate-500" />
-              <span className="animate-typing-dot-2 h-1.5 w-1.5 rounded-full bg-slate-500" />
-              <span className="animate-typing-dot-3 h-1.5 w-1.5 rounded-full bg-slate-500" />
-            </div>
+            streamed ? (
+              <div className="flex justify-start">
+                <div className="max-w-[88%] whitespace-pre-wrap rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm leading-relaxed text-slate-200">
+                  {streamed}
+                  <span className="animate-blink ml-0.5 inline-block h-4 w-px translate-y-0.5 bg-slate-300" />
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-1.5 px-1">
+                <span className="animate-typing-dot h-1.5 w-1.5 rounded-full bg-slate-500" />
+                <span className="animate-typing-dot-2 h-1.5 w-1.5 rounded-full bg-slate-500" />
+                <span className="animate-typing-dot-3 h-1.5 w-1.5 rounded-full bg-slate-500" />
+              </div>
+            )
           )}
 
           {atLimit && (

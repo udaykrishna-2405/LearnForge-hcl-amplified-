@@ -39,6 +39,12 @@
   to   { stroke-dashoffset: 0; }
 }
 
+/* Caret shown at the end of a message while tokens are still arriving. */
+@keyframes blink {
+  0%, 45%  { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
 /* Radar polygons scale up from the chart centre on first paint. */
 @keyframes radarGrow {
   from { opacity: 0; transform: scale(0.6); }
@@ -53,6 +59,7 @@
 .animate-toast-in   { animation: toastIn 0.2s ease-out both; }
 .animate-soft-pulse { animation: softPulse 1.6s ease-in-out infinite; }
 .animate-radar-grow { animation: radarGrow 0.5s ease-out both; transform-origin: center; }
+.animate-blink { animation: blink 1s step-end infinite; }
 
 .animate-draw-check {
   stroke-dasharray: 24;

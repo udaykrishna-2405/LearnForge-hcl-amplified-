@@ -22,6 +22,17 @@ function aiProxy(env) {
             proxyReq.setHeader('Authorization', `Bearer ${env.AI_API_KEY}`);
           }
         });
+
+        // Server-sent events must reach the browser unbuffered, or the whole
+        // stream lands at once and streaming buys nothing.
+        proxy.on('proxyRes', (proxyRes) => {
+          const isStream = (proxyRes.headers['content-type'] ?? '').includes('event-stream');
+          if (!isStream) return;
+          proxyRes.headers['cache-control'] = 'no-cache';
+          proxyRes.headers['connection'] = 'keep-alive';
+          delete proxyRes.headers['content-length'];
+          delete proxyRes.headers['content-encoding'];
+        });
       },
     },
   };

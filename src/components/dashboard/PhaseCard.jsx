@@ -14,7 +14,7 @@ const ACCENT = {
 function PhaseCard({
   phase, phaseIndex, isExpanded, onToggle,
   priorItems, completedItems, skippedItems,
-  onCompleteCourse, onSkipCourse, isBusy,
+  onCompleteCourse, onSkipCourse, isBusy, learnerId, notes, dispatch,
 }) {
   const items = phase.items ?? [];
   const statuses = items.map((item, i) =>
@@ -59,6 +59,9 @@ function PhaseCard({
               onComplete={onCompleteCourse}
               onSkip={onSkipCourse}
               isBusy={isBusy}
+              learnerId={learnerId}
+              note={notes[item.item_id]}
+              dispatch={dispatch}
             />
           ))}
 
