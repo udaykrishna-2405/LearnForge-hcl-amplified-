@@ -28,6 +28,7 @@ import { calculateStreak, toDateKey } from '../utils/studySession';
 const PROFILE_DEBOUNCE_MS = 2000;
 const PATH_DEBOUNCE_MS = 2000;
 const CHAT_DEBOUNCE_MS = 3000;
+const HYDRATE_TIMEOUT_MS = 8000;
 
 /** Turns persisted course_progress rows back into the reducer's flat lists. */
 function foldProgressRows(rows) {
@@ -56,46 +57,74 @@ function foldProgressRows(rows) {
 
 export default function Workspace() {
   const { user } = useAuth();
+  const userId = user?.id;
   const [state, dispatch] = useReducer(appReducer, initialState);
-  const [isHydrating, setIsHydrating] = useState(true);
-  const hydratedFor = useRef(null);
+  const [hydratedUserId, setHydratedUserId] = useState(null);
+
+  // Derived rather than stored: the loading screen is simply "this user's data
+  // has not landed yet". A stored flag has to be cleared on every exit path,
+  // and missing one of them strands the user on the loading screen for good.
+  const isHydrating = Boolean(userId) && hydratedUserId !== userId;
 
   const {
     view, path, profile, completedItems, skippedItems, studySessions,
     chatHistory, assistantHistory, assistantOpen,
   } = state;
 
-  // Restores the whole session for a returning learner, or routes a new one
-  // into onboarding. Runs once per signed-in user.
+  /**
+   * Restores a returning learner's session, or sends a new one to onboarding.
+   *
+   * The profile is fetched on its own first because it alone decides which of
+   * those happens. Someone who has not finished onboarding has nothing else to
+   * restore, so they reach the app after one query rather than eight.
+   */
   useEffect(() => {
-    if (!user || hydratedFor.current === user.id) return;
-    hydratedFor.current = user.id;
+    if (!userId) return undefined;
 
     let cancelled = false;
-    setIsHydrating(true);
+
+    // A stalled network must never strand someone on the loading screen; the
+    // app is usable without restored data, so it opens rather than waits.
+    const bail = setTimeout(() => {
+      if (cancelled) return;
+      cancelled = true;
+      dispatch({ type: ACTIONS.SET_VIEW, payload: 'landing' });
+      setHydratedUserId(userId);
+    }, HYDRATE_TIMEOUT_MS);
 
     (async () => {
       try {
-        const [profileRow, activePath, progressRows, notes, sessions, onboardingChat, assistantChat, todaysPlan] =
+        const profileRow = await loadUserProfile(userId);
+        if (cancelled) return;
+
+        if (!profileRow?.onboarding_complete) {
+          dispatch({ type: ACTIONS.SET_VIEW, payload: 'landing' });
+          if (profileRow?.profile_data) {
+            dispatch({
+              type: ACTIONS.HYDRATE_USER_DATA,
+              payload: { profile: profileRow.profile_data },
+            });
+          }
+          return;
+        }
+
+        const [activePath, progressRows, notes, sessions, onboardingChat, assistantChat, todaysPlan] =
           await Promise.all([
-            loadUserProfile(user.id),
-            loadActivePath(user.id),
-            loadCourseProgress(user.id),
-            loadAllNotes(user.id),
-            loadStudySessions(user.id),
-            loadChatHistory(user.id, 'onboarding'),
-            loadChatHistory(user.id, 'assistant'),
-            loadDailyPlan(user.id, toDateKey()),
+            loadActivePath(userId),
+            loadCourseProgress(userId),
+            loadAllNotes(userId),
+            loadStudySessions(userId),
+            loadChatHistory(userId, 'onboarding'),
+            loadChatHistory(userId, 'assistant'),
+            loadDailyPlan(userId, toDateKey()),
           ]);
 
         if (cancelled) return;
 
-        const isReturning = profileRow?.onboarding_complete === true && activePath?.path;
-
         dispatch({
           type: ACTIONS.HYDRATE_USER_DATA,
           payload: {
-            profile: profileRow?.profile_data ?? null,
+            profile: profileRow.profile_data,
             path: activePath?.path ?? null,
             pathStartedAt: activePath?.startedAt ?? null,
             ...foldProgressRows(progressRows),
@@ -107,25 +136,32 @@ export default function Workspace() {
           },
         });
 
-        dispatch({ type: ACTIONS.SET_VIEW, payload: isReturning ? 'dashboard' : 'landing' });
+        dispatch({
+          type: ACTIONS.SET_VIEW,
+          payload: activePath?.path ? 'dashboard' : 'landing',
+        });
       } catch {
-        // A failed restore must not lock the learner out; they land on the
-        // start of the flow with whatever state loaded.
+        // A failed restore must not lock anyone out; they land at the start of
+        // the flow with whatever state did load.
         if (!cancelled) dispatch({ type: ACTIONS.SET_VIEW, payload: 'landing' });
       } finally {
-        if (!cancelled) setIsHydrating(false);
+        clearTimeout(bail);
+        // Unconditional, and idempotent under StrictMode's double mount.
+        setHydratedUserId(userId);
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [user]);
+    return () => {
+      cancelled = true;
+      clearTimeout(bail);
+    };
+  }, [userId]);
 
   // Clears the previous learner's data so a second sign-in starts clean.
   useEffect(() => {
-    if (user) return;
-    hydratedFor.current = null;
+    if (userId) return;
     dispatch({ type: ACTIONS.SIGN_OUT_RESET });
-  }, [user]);
+  }, [userId]);
 
   const streak = useMemo(() => calculateStreak(studySessions), [studySessions]);
   useEffect(() => {

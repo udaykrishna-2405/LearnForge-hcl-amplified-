@@ -45,10 +45,16 @@ export async function signOut() {
   return { error: friendly(error) };
 }
 
-export async function getCurrentUser() {
-  const { data, error } = await supabase.auth.getUser();
+/**
+ * Reads the session already stored in the browser. getUser() would make a
+ * network round trip before anything can render; this is local and returns
+ * immediately, and the SDK refreshes the token in the background, notifying
+ * through onAuthStateChange.
+ */
+export async function getStoredUser() {
+  const { data, error } = await supabase.auth.getSession();
   if (error) return null;
-  return data?.user ?? null;
+  return data?.session?.user ?? null;
 }
 
 /** Returns the subscription so callers can unsubscribe on unmount. */

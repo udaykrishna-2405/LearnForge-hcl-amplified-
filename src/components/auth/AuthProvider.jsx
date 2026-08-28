@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AuthContext } from '../../hooks/useAuth';
 import {
-  getCurrentUser,
+  getStoredUser,
   onAuthStateChange,
   signOut as authSignOut,
 } from '../../services/authService';
@@ -15,7 +15,7 @@ export default function AuthProvider({ children }) {
 
     // Restores an existing session before the first paint decides what to show.
     (async () => {
-      const current = await getCurrentUser();
+      const current = await getStoredUser();
       if (cancelled) return;
       setUser(current);
       setIsLoading(false);
@@ -23,8 +23,11 @@ export default function AuthProvider({ children }) {
 
     const subscription = onAuthStateChange((event, nextUser) => {
       if (cancelled) return;
-      // SIGNED_IN, TOKEN_REFRESHED and USER_UPDATED all carry a fresh user.
-      setUser(event === 'SIGNED_OUT' ? null : nextUser);
+      const resolved = event === 'SIGNED_OUT' ? null : nextUser;
+      // Every auth event delivers a fresh object for the same person. Keeping
+      // the previous reference stops downstream effects re-running on each
+      // token refresh.
+      setUser((prev) => (prev?.id && prev.id === resolved?.id ? prev : resolved));
       setIsLoading(false);
     });
 
