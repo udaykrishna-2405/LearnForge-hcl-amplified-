@@ -19,6 +19,6 @@ export const supabase = configError
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true, // Required for the OAuth redirect to complete.
+        detectSessionInUrl: true, // Lets password-recovery links establish a session.
       },
     });
