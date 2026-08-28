@@ -21,7 +21,7 @@ const MAX_CHAT_MESSAGES = 12;
 
 export default function OnboardingView({ state, dispatch, userId }) {
   const [isReplying, setIsReplying] = useState(false);
-  const [chatError, setChatError] = useState(false);
+  const [chatError, setChatError] = useState(null);
   const [generateError, setGenerateError] = useState(false);
   const greeted = useRef(false);
 
@@ -48,7 +48,7 @@ export default function OnboardingView({ state, dispatch, userId }) {
     async (text) => {
       addMessage('user', text);
       setIsReplying(true);
-      setChatError(false);
+      setChatError(null);
 
       const turns = [...chatHistory, { role: 'user', content: text }]
         .map(({ role, content }) => ({ role, content }));

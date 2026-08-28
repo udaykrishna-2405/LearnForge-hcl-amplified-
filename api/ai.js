@@ -26,10 +26,17 @@ export default async function handler(request) {
     return json({ error: 'Method not allowed' }, 405);
   }
 
-  const apiKey = process.env.AI_API_KEY;
+  // Pasting a key into a hosting dashboard commonly picks up a trailing
+  // newline, surrounding quotes, or the "Bearer " prefix from a code sample.
+  // All three are silently corrected rather than failing as a bad credential.
+  const apiKey = (process.env.AI_API_KEY ?? '')
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .replace(/^Bearer\s+/i, '')
+    .trim();
+
   if (!apiKey) {
-    // Deliberately vague to the client; the detail belongs in the host's logs.
-    return json({ error: 'AI service is not configured' }, 503);
+    return json({ error: 'AI service is not configured', code: 'no_key' }, 503);
   }
 
   let upstream;
@@ -45,6 +52,17 @@ export default async function handler(request) {
     });
   } catch {
     return json({ error: 'Could not reach the AI service' }, 502);
+  }
+
+  // An upstream 401/403 means the configured key was rejected. Saying so
+  // plainly is the difference between a five-minute fix and a hunt.
+  if (upstream.status === 401 || upstream.status === 403) {
+    return json({
+      error: 'The AI provider rejected the configured API key.',
+      code: 'bad_key',
+      hint: 'Check AI_API_KEY in the hosting project settings, then redeploy — '
+          + 'Vercel snapshots environment variables into each deployment.',
+    }, 502);
   }
 
   if (!upstream.ok || !upstream.body) {

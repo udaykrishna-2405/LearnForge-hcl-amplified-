@@ -301,6 +301,13 @@ async function postOnce(systemPrompt, messages, budget, temperature, onChunk) {
     if (response.status === 404 || response.status === 403) {
       throw new AiServiceError('Model is not available for this account', 'unavailable');
     }
+    // A rejected key will be rejected again; retrying only doubles the wait.
+    if (response.status === 502 || response.status === 401) {
+      const detail = await response.json().catch(() => null);
+      if (detail?.code === 'bad_key' || detail?.code === 'no_key') {
+        throw new AiServiceError('The AI service is not configured correctly', 'config');
+      }
+    }
     if (!response.ok || !response.body) {
       throw new AiServiceError(`Upstream responded ${response.status}`, 'network');
     }
@@ -354,7 +361,7 @@ async function callModel(kind, systemPrompt, messages, temperature = TEMPERATURE
   try {
     return await postOnce(systemPrompt, messages, budget, temperature);
   } catch (error) {
-    if (error?.kind === 'unavailable') throw error;
+    if (error?.kind === 'unavailable' || error?.kind === 'config') throw error;
     if (error?.name === 'AbortError') {
       throw new AiServiceError('The model did not respond in time', 'timeout');
     }
