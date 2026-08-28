@@ -7,28 +7,46 @@ import { ADAPTATION_SYSTEM_PROMPT } from '../prompts/pathAdaptation';
 // Same-origin path; vite.config.js proxies it upstream and attaches the key,
 // which the model host cannot receive cross-origin and the client must not hold.
 const API_ENDPOINT = '/api/ai';
-const MODEL = 'deepseek-ai/deepseek-v4-pro-0813';
+/**
+ * Chosen on measured latency against this account. deepseek-v4-pro answered a
+ * two-sentence prompt in 70s and generated a path in 128s, which no amount of
+ * prompt tuning fixes. This model does the same work in under a second and
+ * generates a path in ~20s, with no loss in structural quality.
+ */
+const MODEL = 'nvidia/nemotron-3-nano-30b-a3b';
+
+/**
+ * The model reasons aloud by default and leaks that reasoning into its answer,
+ * which broke JSON parsing and exhausted the token budget on path generation.
+ * Disabled, it emits the answer directly.
+ */
+const TEXT_MODEL_ARGS = { chat_template_kwargs: { thinking: false } };
 
 // Certificate checking needs a model that can actually see the upload.
 const VISION_MODEL = 'meta/llama-3.2-90b-vision-instruct';
 
-const COOLDOWN_MS = 1_000;
-const RETRY_DELAY_MS = 2_000;
+const COOLDOWN_MS = 250;
+const RETRY_DELAY_MS = 1_000;
 
-// This endpoint is slow and highly variable — measured at 17-56s for a
-// two-token reply — so budgets are generous and scale with output size.
+/**
+ * Ceilings on silence, not on total duration — the budget resets on every
+ * delta. Sized at several times the measured cost of each call so a slow
+ * response still completes, while a dead connection fails quickly.
+ * Measured: chat 0.6s, extraction 1.2s, quiz 1.7s, readiness 2.3s,
+ * adaptation 4.1s, path generation 19.8s.
+ */
 const TIMEOUT_MS = {
-  streaming: 120_000,
-  vision: 120_000,
-  quizVerification: 90_000,
-  dailyPlan: 90_000,
-  quiz: 90_000,
-  readiness: 120_000,
-  onboarding: 90_000,
-  profileExtraction: 90_000,
-  pathGeneration: 210_000,
-  adaptation: 120_000,
-  assistant: 90_000,
+  streaming: 45_000,
+  vision: 90_000,
+  quizVerification: 45_000,
+  dailyPlan: 45_000,
+  quiz: 45_000,
+  readiness: 45_000,
+  onboarding: 30_000,
+  profileExtraction: 30_000,
+  pathGeneration: 90_000,
+  adaptation: 45_000,
+  assistant: 45_000,
 };
 
 /**
@@ -266,6 +284,7 @@ async function postOnce(systemPrompt, messages, budget, temperature, onChunk) {
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({
         model,
+        ...(model === MODEL ? TEXT_MODEL_ARGS : {}),
         // Vision requests carry their instruction inside the user turn, so the
         // system role is omitted when there is no system prompt to send.
         messages: systemPrompt
