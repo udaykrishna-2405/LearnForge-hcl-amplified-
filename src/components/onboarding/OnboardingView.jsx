@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ChatInterface from './ChatInterface';
 import ProfileCard from './ProfileCard';
 import Button from '../shared/Button';
+import SignOutButton from '../shared/SignOutButton';
 import { AlertIcon, ArrowRightIcon } from '../shared/Icons';
 import { chatWithAI, extractProfile, generatePath } from '../../services/aiService';
 import { COURSE_CATALOG } from '../../data/courseCatalog';
@@ -117,7 +118,12 @@ export default function OnboardingView({ state, dispatch, userId }) {
         <Button variant="ghost" size="sm" onClick={() => dispatch({ type: ACTIONS.SET_VIEW, payload: 'landing' })}>
           Back
         </Button>
-        <span className="text-sm text-slate-400">Step 1 of 2 · Building your profile</span>
+        <div className="flex items-center gap-4">
+          <span className="hidden text-sm text-slate-400 sm:inline">
+            Step 1 of 2 · Building your profile
+          </span>
+          <SignOutButton />
+        </div>
       </header>
 
       <div className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[1fr_360px] lg:gap-8">

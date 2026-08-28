@@ -1,4 +1,5 @@
 import Button from '../shared/Button';
+import SignOutButton from '../shared/SignOutButton';
 import { ArrowRightIcon } from '../shared/Icons';
 
 const CAPABILITIES = [
@@ -10,7 +11,11 @@ const CAPABILITIES = [
 export default function LandingPage({ onStart }) {
   return (
     <div className="min-h-screen bg-dot-pattern">
-      <main className="mx-auto max-w-3xl px-6 py-24 text-center md:py-32">
+      <header className="flex h-14 items-center justify-end px-4 sm:px-6">
+        <SignOutButton />
+      </header>
+
+      <main className="mx-auto max-w-3xl px-6 pb-24 pt-10 text-center md:pb-32 md:pt-16">
         <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
           AI-Powered Learning Paths
         </p>
