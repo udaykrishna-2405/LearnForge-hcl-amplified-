@@ -10,10 +10,12 @@ import PaceTracker from './PaceTracker';
 import PathChangelog from './PathChangelog';
 import FeedbackModal from './FeedbackModal';
 import ReadinessPanel from './ReadinessPanel';
+import VerificationUpload from './VerificationUpload';
 import { applyPathAdaptation, calculateProgress, getAllItems } from '../../utils/helpers';
 import { getSkillLevels, getTargetSkillLevels, getTopSkills } from '../../utils/skillCalculations';
 import { getPaceStatus, toDateKey } from '../../utils/studySession';
 import { adaptPath } from '../../services/aiService';
+import { saveCourseProgress } from '../../services/userDataService';
 import { COURSE_CATALOG } from '../../data/courseCatalog';
 import { ACTIONS } from '../../state/appReducer';
 
@@ -21,8 +23,9 @@ import { ACTIONS } from '../../state/appReducer';
 // feedback sheet slides over it.
 const FEEDBACK_DELAY_MS = 800;
 
-export default function DashboardView({ state, dispatch, learnerId }) {
+export default function DashboardView({ state, dispatch, userId }) {
   const [pendingSkip, setPendingSkip] = useState(null);
+  const [pendingVerification, setPendingVerification] = useState(null);
   const [isAdapting, setIsAdapting] = useState(false);
   const [plannerPreset, setPlannerPreset] = useState(null);
   const plannerRef = useRef(null);
@@ -31,6 +34,7 @@ export default function DashboardView({ state, dispatch, learnerId }) {
     path, profile, completedItems, skippedItems, skipReasons, expandedPhases,
     studySessions, streak, dailyPlan, changelog, notes, readinessScore,
     feedbackModalOpen, feedbackTargetCourse, pathStartedAt,
+    verifications, verifyingItemId,
   } = state;
 
   const progress = useMemo(
@@ -60,17 +64,48 @@ export default function DashboardView({ state, dispatch, learnerId }) {
     [dispatch]
   );
 
-  /** Completion is recorded at once; the feedback prompt follows the animation. */
+  /** Completion now requires proof, so this opens the verification modal. */
   const handleComplete = useCallback(
     (item) => {
-      dispatch({ type: ACTIONS.COMPLETE_COURSE, payload: item.item_id });
-      notify('Course marked complete');
+      setPendingVerification(item);
+      dispatch({ type: ACTIONS.START_VERIFICATION, payload: item.item_id });
+    },
+    [dispatch]
+  );
+
+  /** Runs once proof is accepted, then asks how the course felt. */
+  const handleVerified = useCallback(
+    ({ verified, method, confidence }) => {
+      const item = pendingVerification;
+      setPendingVerification(null);
+      if (!item) return;
+
+      dispatch({
+        type: ACTIONS.VERIFICATION_RESULT,
+        payload: { itemId: item.item_id, verified, method, confidence },
+      });
+      notify('Completion verified');
+
+      if (userId) {
+        saveCourseProgress(userId, item.item_id, {
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          verification_status: 'verified',
+          verification_result: { method, confidence },
+        }).catch(() => {});
+      }
+
       setTimeout(() => {
         dispatch({ type: ACTIONS.OPEN_FEEDBACK, payload: item });
       }, FEEDBACK_DELAY_MS);
     },
-    [dispatch, notify]
+    [dispatch, notify, pendingVerification, userId]
   );
+
+  const handleVerificationClose = useCallback(() => {
+    setPendingVerification(null);
+    dispatch({ type: ACTIONS.CANCEL_VERIFICATION });
+  }, [dispatch]);
 
   const handleTogglePhase = useCallback(
     (phaseId) => dispatch({ type: ACTIONS.TOGGLE_PHASE, payload: phaseId }),
@@ -203,7 +238,7 @@ export default function DashboardView({ state, dispatch, learnerId }) {
 
         <div className="mt-8" ref={plannerRef}>
           <DailyPlanner
-            learnerId={learnerId}
+            userId={userId}
             profile={profile}
             path={path}
             completedItems={completedItems}
@@ -244,9 +279,11 @@ export default function DashboardView({ state, dispatch, learnerId }) {
             onCompleteCourse={handleComplete}
             onSkipCourse={setPendingSkip}
             isBusy={isAdapting}
-            learnerId={learnerId}
+            userId={userId}
             notes={notes}
             dispatch={dispatch}
+            verifications={verifications}
+            verifyingItemId={verifyingItemId}
           />
         </div>
 
@@ -272,6 +309,15 @@ export default function DashboardView({ state, dispatch, learnerId }) {
           courseTitle={pendingSkip.title}
           onConfirm={handleSkipConfirm}
           onClose={() => setPendingSkip(null)}
+        />
+      )}
+
+      {pendingVerification && (
+        <VerificationUpload
+          course={pendingVerification}
+          userId={userId}
+          onVerified={handleVerified}
+          onClose={handleVerificationClose}
         />
       )}
 

@@ -6,13 +6,18 @@ import { getDifficultyColor, formatDuration } from '../../utils/helpers';
 
 const SURFACE = {
   completed: 'border-slate-800 bg-slate-800/40',
+  pending_verification: 'border-amber-500/40 bg-amber-500/5',
   active: 'border-slate-700 bg-slate-800',
   locked: 'border-slate-800 bg-slate-800/20 opacity-60',
   skipped: 'border-slate-800 bg-slate-800/20',
 };
 
-function CourseCard({ item, status, onComplete, onSkip, isBusy, learnerId, note, dispatch }) {
-  const isActive = status === 'active';
+function CourseCard({
+  item, status, onComplete, onSkip, isBusy, userId, note, dispatch, verification,
+}) {
+  const isVerifying = status === 'pending_verification';
+  const isActive = status === 'active' && !isVerifying;
+  const wasRejected = verification?.status === 'rejected';
 
   return (
     <article
@@ -59,22 +64,43 @@ function CourseCard({ item, status, onComplete, onSkip, isBusy, learnerId, note,
         {isActive && (
           <>
             <Button size="sm" onClick={() => onComplete(item)} disabled={isBusy}>
-              <CheckIcon className="w-3.5 h-3.5" />
-              Mark complete
+              Submit completion
             </Button>
             <Button size="sm" variant="secondary" onClick={() => onSkip(item)} disabled={isBusy}>
               Skip
             </Button>
           </>
         )}
-        {status === 'completed' && <span className="text-sm text-emerald-400">Completed</span>}
+        {isVerifying && (
+          <span className="flex items-center gap-1.5 text-sm text-amber-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-soft-pulse" />
+            Verifying…
+          </span>
+        )}
+        {status === 'completed' && (
+          <span className="flex items-center gap-1.5 text-sm text-emerald-400">
+            <CheckIcon className="w-3.5 h-3.5" />
+            {verification?.status === 'verified' ? 'Verified' : 'Completed'}
+            {verification?.confidence != null && (
+              <span className="font-mono text-xs tabular-nums text-emerald-500/80">
+                {Math.round(verification.confidence * 100)}%
+              </span>
+            )}
+          </span>
+        )}
         {status === 'skipped' && <span className="text-sm text-slate-400">Skipped</span>}
         {status === 'locked' && <span className="text-sm text-slate-400">Complete prerequisites first</span>}
       </div>
 
+      {wasRejected && isActive && (
+        <p className="mt-2 text-xs text-amber-400">
+          Verification didn&apos;t pass — try again with a clearer image.
+        </p>
+      )}
+
       {status !== 'locked' && (
         <CourseNotes
-          learnerId={learnerId}
+          userId={userId}
           courseId={item.item_id}
           courseTitle={item.title}
           note={note}

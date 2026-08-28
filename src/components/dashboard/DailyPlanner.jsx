@@ -3,14 +3,14 @@ import Button from '../shared/Button';
 import { AlertIcon, CheckIcon } from '../shared/Icons';
 import { generateDailyPlan } from '../../services/aiService';
 import { buildPlannerContext, getDailyPlanPrompt } from '../../prompts/dailyPlanner';
-import { upsertDailyPlan, upsertStudySession } from '../../services/supabaseClient';
+import { saveDailyPlan, saveStudySession } from '../../services/userDataService';
 import { toDateKey } from '../../utils/studySession';
 import { ACTIONS } from '../../state/appReducer';
 
 const TIME_OPTIONS = [30, 45, 60, 90];
 
 export default function DailyPlanner({
-  learnerId, profile, path, completedItems, sessions, streak, plan, paceStatus, presetMinutes, dispatch,
+  userId, profile, path, completedItems, sessions, streak, plan, paceStatus, presetMinutes, dispatch,
 }) {
   const [availableMinutes, setAvailableMinutes] = useState(presetMinutes ?? 45);
   const [isLoading, setIsLoading] = useState(false);
@@ -31,20 +31,20 @@ export default function DailyPlanner({
         buildPlannerContext({ profile, path, completedItems, sessions, paceStatus })
       );
       dispatch({ type: ACTIONS.SET_DAILY_PLAN, payload: result });
-      void upsertDailyPlan(learnerId, today, result);
+      void saveDailyPlan(userId, today, result).catch(() => {});
     } catch {
       setError(true);
     } finally {
       setIsLoading(false);
     }
-  }, [availableMinutes, completedItems, dispatch, isLoading, learnerId, paceStatus, path, profile, sessions, today]);
+  }, [availableMinutes, completedItems, dispatch, isLoading, userId, paceStatus, path, profile, sessions, today]);
 
   const handleLogSession = useCallback(() => {
     dispatch({ type: ACTIONS.LOG_STUDY_SESSION, payload: { date: today, minutes: availableMinutes } });
-    void upsertStudySession(learnerId, today, availableMinutes, profile?.target_role);
+    void saveStudySession(userId, today, availableMinutes).catch(() => {});
     setJustLogged(true);
     setTimeout(() => setJustLogged(false), 2000);
-  }, [availableMinutes, dispatch, learnerId, profile?.target_role, today]);
+  }, [availableMinutes, dispatch, userId, today]);
 
   if (sessionLogged && !justLogged) {
     return (

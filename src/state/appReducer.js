@@ -36,6 +36,15 @@ export const ACTIONS = {
 
   // ─── Readiness ───
   SET_READINESS_SCORE: 'SET_READINESS_SCORE',
+
+  // ─── Auth & persistence ───
+  HYDRATE_USER_DATA: 'HYDRATE_USER_DATA',
+  SIGN_OUT_RESET: 'SIGN_OUT_RESET',
+
+  // ─── Completion verification ───
+  START_VERIFICATION: 'START_VERIFICATION',
+  CANCEL_VERIFICATION: 'CANCEL_VERIFICATION',
+  VERIFICATION_RESULT: 'VERIFICATION_RESULT',
 };
 
 export const initialState = {
@@ -63,6 +72,9 @@ export const initialState = {
   readinessScore: null,
   feedbackModalOpen: false,
   feedbackTargetCourse: null,
+
+  verifyingItemId: null,      // Course currently awaiting proof
+  verifications: {},          // itemId -> { status, confidence, method, reason }
 };
 
 // ─── Reducer ────────────────────────────────────────────────
@@ -201,6 +213,68 @@ export function appReducer(state, action) {
 
     case ACTIONS.SET_READINESS_SCORE:
       return { ...state, readinessScore: action.payload };
+
+    // ─── Auth & persistence ───
+
+    /** Restores a returning learner's whole session in one dispatch. */
+    case ACTIONS.HYDRATE_USER_DATA: {
+      const {
+        profile, path, pathStartedAt, completedItems, skippedItems, skipReasons,
+        verifications, notes, studySessions, dailyPlan, chatHistory, assistantHistory,
+      } = action.payload;
+
+      return {
+        ...state,
+        profile: profile ?? state.profile,
+        path: path ?? state.path,
+        pathStartedAt: pathStartedAt ?? state.pathStartedAt,
+        pathStatus: path ? 'ready' : state.pathStatus,
+        expandedPhases: path?.phases?.[0] ? [path.phases[0].phase_id] : state.expandedPhases,
+        completedItems: completedItems ?? state.completedItems,
+        skippedItems: skippedItems ?? state.skippedItems,
+        skipReasons: skipReasons ?? state.skipReasons,
+        verifications: verifications ?? state.verifications,
+        notes: notes ?? state.notes,
+        studySessions: studySessions ?? state.studySessions,
+        dailyPlan: dailyPlan ?? state.dailyPlan,
+        chatHistory: chatHistory?.length ? chatHistory : state.chatHistory,
+        assistantHistory: assistantHistory?.length ? assistantHistory : state.assistantHistory,
+      };
+    }
+
+    case ACTIONS.SIGN_OUT_RESET:
+      return initialState;
+
+    // ─── Completion verification ───
+
+    case ACTIONS.START_VERIFICATION:
+      return { ...state, verifyingItemId: action.payload };
+
+    case ACTIONS.CANCEL_VERIFICATION:
+      return { ...state, verifyingItemId: null };
+
+    /**
+     * On success this defers to the same completion transition as
+     * COMPLETE_COURSE, so verified and directly-marked courses converge on one
+     * code path and the existing action keeps working untouched.
+     */
+    case ACTIONS.VERIFICATION_RESULT: {
+      const { itemId, verified, confidence, method, reason } = action.payload;
+
+      const verifications = {
+        ...state.verifications,
+        [itemId]: verified
+          ? { status: 'verified', confidence, method }
+          : { status: 'rejected', reason },
+      };
+
+      if (!verified) {
+        return { ...state, verifyingItemId: null, verifications };
+      }
+
+      const completed = appReducer(state, { type: ACTIONS.COMPLETE_COURSE, payload: itemId });
+      return { ...completed, verifyingItemId: null, verifications };
+    }
 
     case ACTIONS.RESET:
       return initialState;

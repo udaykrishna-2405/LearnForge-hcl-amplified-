@@ -8,6 +8,7 @@ import { COURSE_CATALOG } from '../../data/courseCatalog';
 import { SKILL_TAXONOMY, DOMAIN_SKILL_REQUIREMENTS } from '../../data/skillTaxonomy';
 import { SAMPLE_PATH } from '../../data/samplePath';
 import { ACTIONS } from '../../state/appReducer';
+import { saveActivePath, saveUserProfile } from '../../services/userDataService';
 
 // Local so the first screen costs nothing and appears instantly.
 const GREETING =
@@ -17,7 +18,7 @@ const GREETING =
 // we finish with what we have rather than let the conversation run on.
 const MAX_CHAT_MESSAGES = 12;
 
-export default function OnboardingView({ state, dispatch }) {
+export default function OnboardingView({ state, dispatch, userId }) {
   const [isReplying, setIsReplying] = useState(false);
   const [chatError, setChatError] = useState(false);
   const [generateError, setGenerateError] = useState(false);
@@ -78,11 +79,17 @@ export default function OnboardingView({ state, dispatch }) {
 
   const openDashboard = useCallback(
     (path) => {
+      // Written immediately so a reload right after onboarding still lands on
+      // the dashboard rather than starting the flow again.
+      if (userId) {
+        saveUserProfile(userId, { ...profile, profile_complete: true }, true).catch(() => {});
+        saveActivePath(userId, path).catch(() => {});
+      }
       dispatch({ type: ACTIONS.SET_PATH, payload: path });
       dispatch({ type: ACTIONS.SET_VIEW, payload: 'dashboard' });
       dispatch({ type: ACTIONS.SET_LOADING, payload: { isLoading: false } });
     },
-    [dispatch]
+    [dispatch, profile, userId]
   );
 
   const handleGenerate = useCallback(async () => {

@@ -9,6 +9,9 @@ import { ADAPTATION_SYSTEM_PROMPT } from '../prompts/pathAdaptation';
 const API_ENDPOINT = '/api/ai';
 const MODEL = 'deepseek-ai/deepseek-v4-pro-0813';
 
+// Certificate checking needs a model that can actually see the upload.
+const VISION_MODEL = 'meta/llama-3.2-90b-vision-instruct';
+
 const COOLDOWN_MS = 1_000;
 const RETRY_DELAY_MS = 2_000;
 
@@ -16,6 +19,8 @@ const RETRY_DELAY_MS = 2_000;
 // two-token reply — so budgets are generous and scale with output size.
 const TIMEOUT_MS = {
   streaming: 120_000,
+  vision: 120_000,
+  quizVerification: 90_000,
   dailyPlan: 90_000,
   quiz: 90_000,
   readiness: 120_000,
@@ -34,6 +39,8 @@ const TIMEOUT_MS = {
  */
 const MAX_TOKENS = {
   streaming: 1000,
+  vision: 600,
+  quizVerification: 900,
   dailyPlan: 700,
   quiz: 1200,
   readiness: 900,
@@ -243,6 +250,7 @@ function readDelta(line) {
  * simply accumulated and returned as one string.
  */
 async function postOnce(systemPrompt, messages, budget, temperature, onChunk) {
+  const model = budget.model ?? MODEL;
   const controller = new AbortController();
   // Reset by each delta, so the budget limits silence rather than total length.
   let idleTimer;
@@ -257,8 +265,12 @@ async function postOnce(systemPrompt, messages, budget, temperature, onChunk) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        model,
+        // Vision requests carry their instruction inside the user turn, so the
+        // system role is omitted when there is no system prompt to send.
+        messages: systemPrompt
+          ? [{ role: 'system', content: systemPrompt }, ...messages]
+          : messages,
         temperature,
         top_p: 0.95,
         max_tokens: budget.maxTokens,
@@ -267,6 +279,9 @@ async function postOnce(systemPrompt, messages, budget, temperature, onChunk) {
       signal: controller.signal,
     });
 
+    if (response.status === 404 || response.status === 403) {
+      throw new AiServiceError('Model is not available for this account', 'unavailable');
+    }
     if (!response.ok || !response.body) {
       throw new AiServiceError(`Upstream responded ${response.status}`, 'network');
     }
@@ -313,13 +328,14 @@ async function postOnce(systemPrompt, messages, budget, temperature, onChunk) {
  * One retry with a fixed backoff. Timeouts are the exception: the budget is
  * already generous, so a retry would only double an unacceptable wait.
  */
-async function callModel(kind, systemPrompt, messages, temperature = TEMPERATURE.conversational) {
-  const budget = { maxTokens: MAX_TOKENS[kind], timeout: TIMEOUT_MS[kind] };
+async function callModel(kind, systemPrompt, messages, temperature = TEMPERATURE.conversational, model) {
+  const budget = { maxTokens: MAX_TOKENS[kind], timeout: TIMEOUT_MS[kind], model };
 
   await awaitCooldown();
   try {
     return await postOnce(systemPrompt, messages, budget, temperature);
   } catch (error) {
+    if (error?.kind === 'unavailable') throw error;
     if (error?.name === 'AbortError') {
       throw new AiServiceError('The model did not respond in time', 'timeout');
     }
@@ -478,4 +494,53 @@ export function generateReadiness(systemPrompt, context) {
     context,
     (r) => typeof r.overall_score === 'number' && Boolean(r.breakdown)
   );
+}
+
+// ─── Certificate verification ───────────────────────────────
+
+/**
+ * Asks a vision model whether an upload really evidences completion. Throws an
+ * AiServiceError of kind 'unavailable' when the account has no vision access,
+ * which is the signal for the caller to fall back to quiz verification.
+ */
+export async function verifyCertificate(dataUrl, prompt) {
+  const message = {
+    role: 'user',
+    content: [
+      { type: 'image_url', image_url: { url: dataUrl } },
+      { type: 'text', text: prompt },
+    ],
+  };
+
+  const text = await callModel('vision', null, [message], TEMPERATURE.structured, VISION_MODEL);
+  const parsed = extractJSON(text);
+
+  if (!parsed || typeof parsed.verified !== 'boolean') {
+    throw new AiServiceError('Verification response was not valid JSON', 'parse');
+  }
+  return parsed;
+}
+
+export async function generateVerificationQuiz(systemPrompt) {
+  const text = await callModel('quizVerification', systemPrompt, [
+    { role: 'user', content: 'Generate the questions.' },
+  ], TEMPERATURE.structured);
+
+  const parsed = extractJSON(text);
+  if (!Array.isArray(parsed?.questions) || parsed.questions.length === 0) {
+    throw new AiServiceError('Quiz response was not valid JSON', 'parse');
+  }
+  return parsed.questions;
+}
+
+export async function evaluateVerificationQuiz(systemPrompt, answers) {
+  const text = await callModel('quizVerification', systemPrompt, [
+    { role: 'user', content: JSON.stringify(answers) },
+  ], TEMPERATURE.structured);
+
+  const parsed = extractJSON(text);
+  if (!parsed || typeof parsed.verified !== 'boolean') {
+    throw new AiServiceError('Evaluation response was not valid JSON', 'parse');
+  }
+  return parsed;
 }

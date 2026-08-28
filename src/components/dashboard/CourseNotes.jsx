@@ -3,15 +3,15 @@ import Button from '../shared/Button';
 import { AlertIcon, CheckIcon, ChevronDownIcon } from '../shared/Icons';
 import { generateQuiz } from '../../services/aiService';
 import { getQuizPrompt } from '../../prompts/quizGeneration';
-import { getNote, saveNote } from '../../utils/notesStorage';
+import { saveNote } from '../../services/userDataService';
 import { ACTIONS } from '../../state/appReducer';
 
 const AUTOSAVE_DELAY_MS = 1500;
 const MIN_CHARS_FOR_QUIZ = 50;
 
-export default function CourseNotes({ learnerId, courseId, courseTitle, note, dispatch }) {
+export default function CourseNotes({ userId, courseId, courseTitle, note, dispatch }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [draft, setDraft] = useState(() => note ?? getNote(courseId));
+  const [draft, setDraft] = useState(note ?? '');
   const [showSaved, setShowSaved] = useState(false);
   const [quiz, setQuiz] = useState(null);
   const [quizState, setQuizState] = useState('idle');
@@ -29,14 +29,14 @@ export default function CourseNotes({ learnerId, courseId, courseTitle, note, di
       setDraft(value);
       clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
-        saveNote(learnerId, courseId, value);
+        saveNote(userId, courseId, value).catch(() => {});
         dispatch({ type: ACTIONS.SAVE_NOTE, payload: { courseId, content: value } });
         setShowSaved(true);
         clearTimeout(savedTimer.current);
         savedTimer.current = setTimeout(() => setShowSaved(false), 2000);
       }, AUTOSAVE_DELAY_MS);
     },
-    [courseId, dispatch, learnerId]
+    [courseId, dispatch, userId]
   );
 
   const handleQuiz = useCallback(async () => {

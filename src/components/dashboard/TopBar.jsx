@@ -1,4 +1,5 @@
 import ProgressRing from '../shared/ProgressRing';
+import UserMenu from './UserMenu';
 
 export default function TopBar({ profile, progress, onHome }) {
   return (
@@ -17,7 +18,10 @@ export default function TopBar({ profile, progress, onHome }) {
           </span>
         )}
 
-        <ProgressRing percentage={progress.percentage} />
+        <div className="flex items-center gap-3">
+          <ProgressRing percentage={progress.percentage} />
+          <UserMenu />
+        </div>
       </div>
     </header>
   );
